@@ -4,30 +4,46 @@ OpenAI Realtime API에 근접한 저지연 음성 대화 시스템을 온프레�
 
 ## 주요 특징
 
-- **초저지연 스트리밍**: 모든 단계(VAD → STT → LLM → TTS)가 스트리밍으로 처리되어 1-2초 이내 응답
+- **저지연 스트리밍**: 모든 단계(VAD → STT → LLM → TTS)가 파이프라인으로 처리되어 2-4초 응답
 - **Multimodal 파이프라인**: 음성 입력부터 음성 출력까지 끊김 없는 처리
 - **Barge-in 지원**: 사용자가 AI의 대화를 중단하고 다시 말할 수 있음
 - **온프레미스**: 모든 처리가 로컬에서 이루어져 프라이버시 보장
-- **한국어 지원**: Whisper 기반의 정확한 한국어 음성 인식
+- **Mac 최적화**: Apple Silicon (M1/M2/M3)에서 MLX 프레임워크로 가속
+
+## ⚠️ 현재 알려진 제한사항
+
+- **MLX Whisper 한국어 인식 불가**: Apple Silicon에서 MLX Whisper의 한국어 모드가 작동하지 않습니다
+  - 현재 영어 모드로만 동작
+  - 한국어 지원이 필요한 경우 OpenAI Whisper 사용 권장 (느리지만 안정적)
+- **STT 인식 불안정**: MLX Whisper가 일부 음성을 인식하지 못하는 경우 발생
+  - 명확한 발음과 적절한 볼륨 필요
+  - 배경 소음 최소화 필요
 
 ## 시스템 아키텍처
 
 ```
-User Speech → VAD (Silero) → STT (Faster-Whisper) → LLM (vLLM/API) → TTS (Piper/Coqui) → Audio Output
-                  ↓                    ↓                    ↓                  ↓
-              실시간 음성 감지      텍스트 변환(스트리밍)   텍스트 생성(스트리밍)  음성 합성(스트리밍)
+User Speech → VAD (Silero) → STT (MLX Whisper) → LLM (Ollama) → TTS (Piper) → Audio Output
+                  ↓                  ↓                  ↓              ↓
+              음성 감지         텍스트 변환        텍스트 생성      음성 합성
+              (~10ms)          (~200ms)         (1-3초)         (~100ms)
 ```
 
 ### 핵심 기술 스택
 
 | 컴포넌트 | 기술 | 특징 |
 |---------|-----|-----|
-| **VAD** | Silero VAD | 매우 빠르고 정확한 음성 구간 감지 |
-| **STT** | Faster-Whisper (CTranslate2) | OpenAI Whisper보다 4배 빠름, 한국어 우수 |
-| **LLM** | Ollama (기본) / vLLM / OpenAI API | 토큰 스트리밍, 저지연 추론 |
-| **TTS** | Piper TTS / Coqui TTS | 실시간 음성 합성, 청크 단위 스트리밍 |
-| **Server** | FastAPI + WebSocket | 비동기 스트리밍 처리 |
+| **VAD** | Silero VAD | 매우 빠르고 정확한 음성 구간 감지, 16kHz 최적화 |
+| **STT** | MLX Whisper (Mac) | Apple Silicon GPU 가속, 영어 모드만 지원 |
+| **LLM** | Ollama (midm-2.0-q8_0) | 로컬 실행, 토큰 스트리밍 |
+| **TTS** | Piper TTS (en_US-lessac-medium) | 빠른 음성 합성, ONNX 최적화 |
+| **Server** | FastAPI + WebSocket | 비동기 처리, 실시간 통신 |
 | **환경 관리** | uv | 초고속 Python 패키지 관리자 |
+
+### Mac (Apple Silicon) 특화 설정
+
+- **MLX Whisper**: Apple의 MLX 프레임워크로 M1/M2/M3 최적화
+- **Ollama**: Apple Silicon 네이티브 지원
+- **주의**: CUDA 설정은 무시됨 (자동으로 Apple Silicon GPU 사용)
 
 ## 설치 가이드
 
@@ -282,12 +298,44 @@ sudo ufw allow 8000/tcp
 lsof -i :8000
 ```
 
-### 3. STT가 느림
+### 3. STT가 느리거나 인식이 안됨 (Apple Silicon)
+
+**증상**:
+- MLX Whisper가 일부 음성을 인식하지 못하고 빈 문자열 반환
+- 한국어 모드에서 인식 실패 (영어로만 인식됨)
+- 일부 발화는 인식되고 일부는 안됨
+
+**원인**:
+- MLX Whisper의 한국어 지원 불완전
+- 음성 품질/볼륨에 민감
+- 배경 소음에 취약
 
 **해결책**:
-- 더 작은 Whisper 모델 사용: `large-v3` → `base`
-- GPU 사용: `WHISPER_DEVICE=cuda`
-- int8 양자화: `WHISPER_COMPUTE_TYPE=int8`
+
+1. **영어 모드 사용** (현재 설정):
+   ```python
+   # server/main.py
+   stt_config = {
+       "language": "en",  # 한국어는 "ko"로 변경 (불안정)
+   }
+   ```
+
+2. **음성 입력 품질 개선**:
+   - 마이크에 가까이 대고 명확하게 발음
+   - 배경 소음 최소화
+   - 적절한 볼륨 유지
+
+3. **더 작은 Whisper 모델 사용**:
+   ```bash
+   # .env 설정
+   WHISPER_MODEL=base  # tiny는 너무 부정확, small은 느림
+   ```
+
+4. **대안: OpenAI Whisper 사용** (느리지만 안정적):
+   ```bash
+   pip install openai-whisper
+   # server/pipeline.py에서 MLXWhisperSTT 대신 WhisperSTT 사용
+   ```
 
 ### 4. LLM 메모리 부족
 
@@ -302,7 +350,41 @@ LLM_GPU_MEMORY_UTILIZATION=0.7
 USE_VLLM=false
 ```
 
-### 5. TTS 품질 문제
+### 5. LLM 응답이 느림 (주요 병목)
+
+**증상**:
+- 전체 응답 시간의 50-70%를 LLM이 차지
+- TTFT (Time To First Token)가 1-3초
+
+**해결책**:
+
+1. **더 작은 모델 사용**:
+   ```bash
+   # Ollama에서 더 작은 모델 다운로드
+   ollama pull llama3.2:3b       # 3B 모델 (가장 빠름)
+   ollama pull qwen2.5:3b        # 3B 다국어 모델
+
+   # .env 설정
+   LLM_MODEL_PATH=llama3.2:3b
+   ```
+
+2. **Ollama 설정 최적화**:
+   ```bash
+   # 더 많은 GPU 레이어 사용 (Apple Silicon)
+   export OLLAMA_NUM_GPU=999
+
+   # 컨텍스트 크기 줄이기
+   LLM_MAX_TOKENS=256  # .env에서 512 → 256
+   ```
+
+3. **vLLM 백엔드 사용** (Linux/NVIDIA GPU만):
+   ```bash
+   pip install vllm
+   # .env 설정
+   LLM_BACKEND=vllm
+   ```
+
+### 6. TTS 품질 문제
 
 **Piper 모델 변경**:
 ```bash
@@ -322,26 +404,36 @@ TTS_ENGINE=coqui
 ## 성능 벤치마크
 
 ### 테스트 환경
+
+**Apple Silicon (현재 구성)**:
+- CPU: Apple M1/M2/M3
+- RAM: 16GB+
+- Framework: MLX (Apple Silicon GPU 가속)
+
+**Intel/NVIDIA (참고)**:
 - CPU: Intel i7-12700K
 - GPU: NVIDIA RTX 3080 (10GB)
 - RAM: 32GB
 
-### End-to-End 지연시간
+### End-to-End 지연시간 (실제 측정치)
 
 | 구성 | TTFT | 전체 응답 시간 |
 |-----|------|--------------|
+| **Apple Silicon (MLX + Ollama)** | **~1-2s** | **2-4s** |
 | CPU (base 모델) | ~800ms | 2.5-3.5s |
 | GPU (base 모델) | ~400ms | 1.2-1.8s |
 | GPU (small 모델, vLLM) | ~250ms | 0.8-1.5s |
 
-### 컴포넌트별 지연시간
+### 컴포넌트별 지연시간 (Apple Silicon 기준)
 
-| 컴포넌트 | CPU | GPU |
-|---------|-----|-----|
-| VAD | ~10ms | ~10ms |
-| STT (base) | 300-500ms | 50-150ms |
-| LLM (TTFT) | 500-1000ms | 100-300ms |
-| TTS (Piper) | 50-100ms | 50-100ms |
+| 컴포넌트 | 지연시간 | 병목 여부 |
+|---------|---------|----------|
+| VAD (Silero) | ~10ms | ✓ 빠름 |
+| STT (MLX Whisper base) | ~200ms | ✓ 빠름 |
+| **LLM (Ollama midm-2.0)** | **1-3s** | ⚠️ **주요 병목** |
+| TTS (Piper) | ~100-500ms | ✓ 빠름 |
+
+**참고**: LLM이 전체 지연시간의 50-70%를 차지하는 주요 병목입니다.
 
 ## API 문서
 
@@ -389,16 +481,26 @@ curl http://localhost:8000/
 
 ## 개발 로드맵
 
+**완료된 기능**:
 - [x] 기본 스트리밍 파이프라인
-- [x] VAD 통합
-- [x] Faster-Whisper STT
-- [x] LLM 스트리밍 (vLLM + OpenAI API)
+- [x] VAD 통합 (Silero VAD)
+- [x] STT 통합 (MLX Whisper for Apple Silicon)
+- [x] LLM 스트리밍 (Ollama + vLLM + OpenAI API)
 - [x] TTS 스트리밍 (Piper + Coqui)
 - [x] Barge-in 기능
 - [x] 웹 클라이언트
-- [ ] StyleTTS2 통합
+- [x] Apple Silicon (M1/M2/M3) 최적화
+
+**현재 작업 중**:
+- [~] LLM-TTS 토큰 스트리밍 개선 (현재 불안정)
+- [~] MLX Whisper 안정성 개선 (한국어 인식 문제)
+
+**향후 계획**:
+- [ ] 안정적인 한국어 STT 지원 (OpenAI Whisper 대체)
+- [ ] LLM 응답 속도 최적화 (더 작은 모델, 양자화)
+- [ ] StyleTTS2 통합 (고품질 TTS)
 - [ ] 한국어 TTS 모델 추가
-- [ ] Multi-turn 대화 개선
+- [ ] Multi-turn 대화 개선 (컨텍스트 관리)
 - [ ] Emotion detection
 - [ ] Docker 이미지
 - [ ] 성능 모니터링 대시보드

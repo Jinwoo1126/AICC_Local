@@ -129,52 +129,132 @@ class RealtimePipeline:
 
             logger.info(f"Transcription: {transcription}")
 
-            # Stage 2: LLM (Language Model)
-            logger.info("Running LLM inference...")
+            # Stage 2 & 3: LLM + TTS Streaming Pipeline
+            logger.info("Running LLM inference with streaming TTS...")
 
-            # Generate LLM response in thread to avoid blocking event loop
-            def generate_llm_tokens():
-                tokens = []
-                logger.debug("Starting LLM token generation...")
-                for token in self.llm.generate_streaming(transcription):
-                    if self.should_interrupt:
-                        logger.info("LLM generation interrupted")
-                        break
-                    tokens.append(token)
-                    logger.debug(f"Generated token: {token}")
-                return tokens
+            # Collect full response for conversation history
+            full_response = []
 
-            # Run LLM generation in thread pool
-            llm_tokens = await asyncio.to_thread(generate_llm_tokens)
-            response_text = "".join(llm_tokens)
-            logger.info(f"LLM response: {response_text}")
+            # Token queue for passing tokens from LLM thread to main async thread
+            token_queue = asyncio.Queue()
+            llm_done = asyncio.Event()
 
+            # Get current event loop
+            loop = asyncio.get_event_loop()
+
+            # LLM token producer (runs in thread)
+            def llm_producer(event_loop):
+                try:
+                    logger.debug("Starting LLM token generation...")
+                    for token in self.llm.generate_streaming(transcription):
+                        if self.should_interrupt:
+                            logger.info("LLM generation interrupted")
+                            break
+                        # Put token in queue (thread-safe)
+                        asyncio.run_coroutine_threadsafe(
+                            token_queue.put(token),
+                            event_loop
+                        ).result()  # Wait for completion
+                        full_response.append(token)
+                except Exception as e:
+                    logger.error(f"LLM producer error: {e}", exc_info=True)
+                finally:
+                    # Signal that LLM is done
+                    try:
+                        asyncio.run_coroutine_threadsafe(
+                            token_queue.put(None),  # Sentinel
+                            event_loop
+                        ).result()
+                        asyncio.run_coroutine_threadsafe(
+                            llm_done.set(),
+                            event_loop
+                        ).result()
+                    except Exception as e:
+                        logger.error(f"Error in finally block: {e}")
+
+            # Start LLM producer in thread
+            import concurrent.futures
+            executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            executor.submit(llm_producer, loop)
+
+            # TTS text buffer (accumulate tokens before synthesis)
+            text_buffer = []
+            word_count = 0
+
+            # Stream tokens and synthesize incrementally
+            while True:
+                # Get next token from queue
+                token = await token_queue.get()
+
+                if token is None:  # LLM finished
+                    # Synthesize any remaining text
+                    if text_buffer:
+                        remaining_text = "".join(text_buffer)
+                        logger.debug(f"Synthesizing final chunk: {remaining_text}")
+
+                        # Run TTS in thread
+                        def synthesize_final():
+                            chunks = []
+                            for audio_chunk in self.tts.synthesize_streaming([remaining_text]):
+                                chunks.append(audio_chunk)
+                            return chunks
+
+                        audio_chunks = await asyncio.to_thread(synthesize_final)
+                        for audio_chunk in audio_chunks:
+                            await output_callback(audio_chunk)
+                    break
+
+                if self.should_interrupt:
+                    logger.info("Streaming interrupted")
+                    break
+
+                # Add token to buffer
+                text_buffer.append(token)
+                word_count += len(token.split())
+
+                # Check if we should synthesize
+                # Synthesize on sentence boundaries or after enough words
+                should_synthesize = (
+                    any(p in token for p in ['.', '!', '?', ',', '\n']) or
+                    word_count >= 8  # Synthesize after ~8 words
+                )
+
+                if should_synthesize and text_buffer:
+                    text_to_synthesize = "".join(text_buffer).strip()
+                    if text_to_synthesize:
+                        logger.debug(f"Synthesizing chunk: {text_to_synthesize}")
+
+                        # Run TTS in thread to avoid blocking
+                        def synthesize_chunk(text):
+                            chunks = []
+                            for audio_chunk in self.tts.synthesize_streaming([text]):
+                                if self.should_interrupt:
+                                    break
+                                chunks.append(audio_chunk)
+                            return chunks
+
+                        audio_chunks = await asyncio.to_thread(synthesize_chunk, text_to_synthesize)
+
+                        # Send audio chunks to client
+                        for audio_chunk in audio_chunks:
+                            await output_callback(audio_chunk)
+
+                        # Clear buffer
+                        text_buffer = []
+                        word_count = 0
+
+            # Wait for LLM to finish
+            await llm_done.wait()
+            executor.shutdown(wait=False)
+
+            # Update conversation history
+            response_text = "".join(full_response)
             if not response_text:
                 logger.warning("No LLM response generated")
                 self.is_processing = False
                 return
 
-            # Stage 3: TTS (Text-to-Speech)
-            logger.info("Running TTS synthesis...")
-
-            # Synthesize audio in thread to avoid blocking event loop
-            def synthesize_audio():
-                chunks = []
-                logger.debug("Starting TTS audio synthesis...")
-                for audio_chunk in self.tts.synthesize_streaming([response_text]):
-                    if self.should_interrupt:
-                        logger.info("TTS synthesis interrupted")
-                        break
-                    chunks.append(audio_chunk)
-                    logger.debug(f"Generated audio chunk: {len(audio_chunk)} bytes")
-                return chunks
-
-            # Run TTS synthesis in thread pool
-            audio_chunks = await asyncio.to_thread(synthesize_audio)
-
-            # Send all audio chunks to client
-            for audio_chunk in audio_chunks:
-                await output_callback(audio_chunk)
+            logger.info(f"LLM response: {response_text}")
             self.llm.update_conversation(transcription, response_text)
 
             logger.info("Speech segment processing completed")
