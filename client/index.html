@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real-time Voice Assistant</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            max-width: 600px;
+            width: 100%;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            text-align: center;
+        }
+
+        .subtitle {
+            color: #666;
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+
+        .status {
+            text-align: center;
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            font-weight: 500;
+        }
+
+        .status.disconnected {
+            background: #fee;
+            color: #c33;
+        }
+
+        .status.connected {
+            background: #efe;
+            color: #3c3;
+        }
+
+        .status.listening {
+            background: #fef8e7;
+            color: #f39c12;
+        }
+
+        .status.speaking {
+            background: #ebf5fb;
+            color: #3498db;
+        }
+
+        .controls {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 30px;
+            flex-wrap: wrap;
+        }
+
+        button {
+            flex: 1;
+            min-width: 120px;
+            padding: 15px 30px;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-danger {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            color: white;
+        }
+
+        .btn-secondary {
+            background: #f0f0f0;
+            color: #333;
+        }
+
+        .visualization {
+            height: 100px;
+            background: #f9f9f9;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .waveform {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 3px;
+            height: 100%;
+        }
+
+        .bar {
+            width: 4px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 2px;
+            transition: height 0.1s ease;
+        }
+
+        .transcript-container {
+            background: #f9f9f9;
+            border-radius: 10px;
+            padding: 20px;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+
+        .transcript-item {
+            margin-bottom: 15px;
+            padding: 10px;
+            border-radius: 8px;
+        }
+
+        .transcript-item.user {
+            background: #e3f2fd;
+            text-align: right;
+        }
+
+        .transcript-item.assistant {
+            background: #f3e5f5;
+            text-align: left;
+        }
+
+        .transcript-label {
+            font-size: 12px;
+            font-weight: 600;
+            margin-bottom: 5px;
+            opacity: 0.7;
+        }
+
+        .transcript-text {
+            font-size: 14px;
+            line-height: 1.5;
+        }
+
+        .text-input-container {
+            margin-top: 20px;
+        }
+
+        .text-input {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 14px;
+            font-family: inherit;
+            resize: vertical;
+            min-height: 60px;
+        }
+
+        .text-input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .send-btn {
+            margin-top: 10px;
+            width: 100%;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .pulse {
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎙️ Real-time Voice Assistant</h1>
+        <p class="subtitle">Low-latency voice conversation system</p>
+
+        <div id="status" class="status disconnected">
+            Disconnected
+        </div>
+
+        <div class="visualization">
+            <div class="waveform" id="waveform">
+                <div class="bar" style="height: 20px;"></div>
+                <div class="bar" style="height: 40px;"></div>
+                <div class="bar" style="height: 30px;"></div>
+                <div class="bar" style="height: 50px;"></div>
+                <div class="bar" style="height: 35px;"></div>
+                <div class="bar" style="height: 45px;"></div>
+                <div class="bar" style="height: 25px;"></div>
+                <div class="bar" style="height: 40px;"></div>
+            </div>
+        </div>
+
+        <div class="controls">
+            <button id="connectBtn" class="btn-primary">Connect</button>
+            <button id="resetBtn" class="btn-secondary" disabled>Reset</button>
+            <button id="bargeInBtn" class="btn-danger" disabled>Stop Talking</button>
+        </div>
+
+        <div class="transcript-container" id="transcript">
+            <div style="text-align: center; color: #999; padding: 40px;">
+                Start talking to begin conversation...
+            </div>
+        </div>
+
+        <div class="text-input-container">
+            <textarea
+                id="textInput"
+                class="text-input"
+                placeholder="Or type your message here..."
+                disabled
+            ></textarea>
+            <button id="sendBtn" class="btn-primary send-btn" disabled>Send Text</button>
+        </div>
+    </div>
+
+    <script>
+        let websocket = null;
+        let audioContext = null;
+        let mediaStream = null;
+        let audioWorkletNode = null;
+        let isConnected = false;
+        let isProcessing = false;
+
+        const statusEl = document.getElementById('status');
+        const connectBtn = document.getElementById('connectBtn');
+        const resetBtn = document.getElementById('resetBtn');
+        const bargeInBtn = document.getElementById('bargeInBtn');
+        const transcriptEl = document.getElementById('transcript');
+        const textInput = document.getElementById('textInput');
+        const sendBtn = document.getElementById('sendBtn');
+        const waveformEl = document.getElementById('waveform');
+
+        // Audio playback queue
+        const audioQueue = [];
+        let isPlaying = false;
+
+        // Connect/Disconnect
+        connectBtn.addEventListener('click', async () => {
+            if (isConnected) {
+                disconnect();
+            } else {
+                await connect();
+            }
+        });
+
+        async function connect() {
+            try {
+                // Request microphone access
+                mediaStream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        sampleRate: 16000,
+                        channelCount: 1,
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true,
+                    }
+                });
+
+                // Initialize audio context
+                audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                    sampleRate: 16000
+                });
+
+                // Connect to WebSocket
+                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                const wsUrl = `${protocol}//${window.location.host}/ws`;
+                websocket = new WebSocket(wsUrl);
+                websocket.binaryType = 'arraybuffer';
+
+                websocket.onopen = onWebSocketOpen;
+                websocket.onmessage = onWebSocketMessage;
+                websocket.onerror = onWebSocketError;
+                websocket.onclose = onWebSocketClose;
+
+            } catch (error) {
+                console.error('Connection error:', error);
+                updateStatus('Error: ' + error.message, 'disconnected');
+            }
+        }
+
+        function disconnect() {
+            if (websocket) {
+                websocket.close();
+            }
+            if (mediaStream) {
+                mediaStream.getTracks().forEach(track => track.stop());
+            }
+            if (audioContext) {
+                audioContext.close();
+            }
+            isConnected = false;
+            updateStatus('Disconnected', 'disconnected');
+            connectBtn.textContent = 'Connect';
+            resetBtn.disabled = true;
+            bargeInBtn.disabled = true;
+            textInput.disabled = true;
+            sendBtn.disabled = true;
+        }
+
+        async function onWebSocketOpen() {
+            console.log('WebSocket connected');
+            isConnected = true;
+            updateStatus('Connected - Listening...', 'connected');
+            connectBtn.textContent = 'Disconnect';
+            resetBtn.disabled = false;
+            bargeInBtn.disabled = false;
+            textInput.disabled = false;
+            sendBtn.disabled = false;
+
+            // Start capturing audio
+            await startAudioCapture();
+        }
+
+        async function startAudioCapture() {
+            const source = audioContext.createMediaStreamSource(mediaStream);
+
+            // Create script processor for audio capture
+            const processor = audioContext.createScriptProcessor(4096, 1, 1);
+
+            processor.onaudioprocess = (e) => {
+                if (!isConnected) return;
+
+                const inputData = e.inputBuffer.getChannelData(0);
+
+                // Convert float32 to int16
+                const int16Data = new Int16Array(inputData.length);
+                for (let i = 0; i < inputData.length; i++) {
+                    const s = Math.max(-1, Math.min(1, inputData[i]));
+                    int16Data[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                }
+
+                // Send to server
+                if (websocket && websocket.readyState === WebSocket.OPEN) {
+                    websocket.send(int16Data.buffer);
+                }
+
+                // Update visualization
+                updateWaveform(inputData);
+            };
+
+            source.connect(processor);
+            processor.connect(audioContext.destination);
+        }
+
+        function onWebSocketMessage(event) {
+            if (event.data instanceof ArrayBuffer) {
+                // Received audio data
+                playAudio(event.data);
+            } else {
+                // Received text message
+                try {
+                    const message = JSON.parse(event.data);
+                    handleControlMessage(message);
+                } catch (error) {
+                    console.error('Error parsing message:', error);
+                }
+            }
+        }
+
+        function onWebSocketError(error) {
+            console.error('WebSocket error:', error);
+            updateStatus('Connection error', 'disconnected');
+        }
+
+        function onWebSocketClose() {
+            console.log('WebSocket closed');
+            disconnect();
+        }
+
+        function handleControlMessage(message) {
+            console.log('Control message:', message);
+
+            if (message.type === 'reset_complete') {
+                transcriptEl.innerHTML = '<div style="text-align: center; color: #999; padding: 40px;">Conversation reset. Start talking...</div>';
+            }
+        }
+
+        // Audio playback
+        async function playAudio(audioData) {
+            audioQueue.push(audioData);
+            if (!isPlaying) {
+                await processAudioQueue();
+            }
+        }
+
+        async function processAudioQueue() {
+            if (audioQueue.length === 0) {
+                isPlaying = false;
+                updateStatus('Connected - Listening...', 'connected');
+                return;
+            }
+
+            isPlaying = true;
+            updateStatus('Assistant Speaking...', 'speaking');
+
+            const audioData = audioQueue.shift();
+
+            try {
+                const audioBuffer = await audioContext.decodeAudioData(audioData);
+                const source = audioContext.createBufferSource();
+                source.buffer = audioBuffer;
+                source.connect(audioContext.destination);
+
+                source.onended = () => {
+                    processAudioQueue();
+                };
+
+                source.start();
+            } catch (error) {
+                console.error('Audio playback error:', error);
+                processAudioQueue();
+            }
+        }
+
+        // Controls
+        resetBtn.addEventListener('click', () => {
+            if (websocket && isConnected) {
+                websocket.send(JSON.stringify({ type: 'reset' }));
+            }
+        });
+
+        bargeInBtn.addEventListener('click', () => {
+            if (websocket && isConnected) {
+                websocket.send(JSON.stringify({ type: 'barge_in' }));
+                audioQueue.length = 0; // Clear audio queue
+                isPlaying = false;
+                updateStatus('Connected - Listening...', 'connected');
+            }
+        });
+
+        sendBtn.addEventListener('click', () => {
+            const text = textInput.value.trim();
+            if (text && websocket && isConnected) {
+                websocket.send(JSON.stringify({
+                    type: 'text',
+                    content: text
+                }));
+                addTranscript('user', text);
+                textInput.value = '';
+            }
+        });
+
+        textInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendBtn.click();
+            }
+        });
+
+        // UI helpers
+        function updateStatus(text, className) {
+            statusEl.textContent = text;
+            statusEl.className = 'status ' + className;
+        }
+
+        function addTranscript(role, text) {
+            if (transcriptEl.querySelector('[style*="text-align: center"]')) {
+                transcriptEl.innerHTML = '';
+            }
+
+            const item = document.createElement('div');
+            item.className = `transcript-item ${role}`;
+            item.innerHTML = `
+                <div class="transcript-label">${role === 'user' ? 'You' : 'Assistant'}</div>
+                <div class="transcript-text">${text}</div>
+            `;
+            transcriptEl.appendChild(item);
+            transcriptEl.scrollTop = transcriptEl.scrollHeight;
+        }
+
+        function updateWaveform(audioData) {
+            // Simple RMS calculation for visualization
+            let sum = 0;
+            for (let i = 0; i < audioData.length; i++) {
+                sum += audioData[i] * audioData[i];
+            }
+            const rms = Math.sqrt(sum / audioData.length);
+            const bars = waveformEl.querySelectorAll('.bar');
+
+            bars.forEach((bar, index) => {
+                const height = Math.max(5, Math.min(80, rms * 1000 + Math.random() * 20));
+                bar.style.height = height + 'px';
+            });
+        }
+
+        // Heartbeat
+        setInterval(() => {
+            if (websocket && websocket.readyState === WebSocket.OPEN) {
+                websocket.send(JSON.stringify({ type: 'ping' }));
+            }
+        }, 30000);
+    </script>
+</body>
+</html>

@@ -1,0 +1,38 @@
+# Core Server
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+python-multipart==0.0.6
+websockets==12.0
+
+# VAD (Voice Activity Detection)
+silero-vad==4.0.1
+torch>=2.0.0
+torchaudio>=2.0.0
+
+# STT (Speech-to-Text)
+faster-whisper==0.10.0
+numpy>=1.24.3
+
+# LLM Inference
+vllm==0.3.0  # For production inference
+# openai>=1.0.0  # Alternative: use OpenAI-compatible API
+
+# TTS (Text-to-Speech)
+# Option 1: Piper (lightweight, fast)
+piper-tts==1.2.0
+
+# Option 2: StyleTTS2 (higher quality)
+# phonemizer==3.2.1
+# scipy>=1.10.0
+# librosa>=0.10.0
+
+# Audio Processing
+soundfile>=0.12.1
+pyaudio>=0.2.13
+webrtcvad>=2.0.10
+
+# Utilities
+python-dotenv==1.0.0
+loguru==0.7.2
+aiofiles==23.2.1
+pydantic==2.5.0
